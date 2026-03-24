@@ -101,8 +101,13 @@ actor WebSocketTransport: Transport {
             }
         }
     #else
-        private actor DefaultWebSocketConnection: NSObject, WebSocketConnection, URLSessionWebSocketDelegate {
+        actor DefaultWebSocketConnection: NSObject, WebSocketConnection, URLSessionWebSocketDelegate {
+            /// Creates a `URLSession` configured with the given parameters.
+            /// Replaceable in tests to control invalidation timing.
+            internal typealias SessionFactory = @Sendable (URLSessionConfiguration, URLSessionDelegate, OperationQueue) -> URLSession
+
             private let logger: Logger
+            private let sessionFactory: SessionFactory
             private let openTcs: TaskCompletionSource<Void> = TaskCompletionSource()
 
             private var urlSession: URLSession?
@@ -112,13 +117,15 @@ actor WebSocketTransport: Transport {
             private var onClose: OnCloseHander?
 
             private var closed: Bool = false
+            private var invalidationContinuation: CheckedContinuation<Void, Never>?
 
-            init(logger: Logger) {
+            init(logger: Logger, sessionFactory: @escaping SessionFactory = { URLSession(configuration: $0, delegate: $1, delegateQueue: $2) }) {
                 self.logger = logger
+                self.sessionFactory = sessionFactory
             }
 
             func connect(request: URLRequest, transferFormat: TransferFormat) async throws {
-                urlSession = URLSession(configuration: .default, delegate: self, delegateQueue: OperationQueue())
+                urlSession = sessionFactory(.default, self, OperationQueue())
                 websocket = urlSession!.webSocketTask(with: request)
 
                 guard websocket != nil else {
@@ -156,8 +163,19 @@ actor WebSocketTransport: Transport {
                 }
                 closed = true
 
-                urlSession?.finishTasksAndInvalidate() // Prevent new task from being created
-                websocket?.cancel() // Close the current connection
+                websocket?.cancel() // Close the current connection first
+
+                // Await full URLSession teardown before releasing references.
+                // Without this, Network.framework's async dealloc of the WebSocket task can
+                // read `self.session` after URLSession has already been freed → objc_retain crash.
+                if let session = urlSession {
+                    await withCheckedContinuation { continuation in
+                        invalidationContinuation = continuation
+                        session.finishTasksAndInvalidate()
+                    }
+                    urlSession = nil
+                    websocket = nil
+                }
 
                 if await openTcs.trySetResult(.failure(error ?? SignalRError.connectionAborted)) == true {
                     receiveTask?.cancel() // Cancel the receive task
@@ -173,6 +191,17 @@ actor WebSocketTransport: Transport {
 
             func onClose(_ handler: OnCloseHander?) async {
                 onClose = handler
+            }
+
+            nonisolated func urlSession(_ session: URLSession, didBecomeInvalidWithError error: (any Error)?) {
+                Task {
+                    await self.resumeInvalidationContinuation()
+                }
+            }
+
+            private func resumeInvalidationContinuation() {
+                invalidationContinuation?.resume()
+                invalidationContinuation = nil
             }
 
             nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
