@@ -20,6 +20,13 @@ public struct HttpConnectionOptions {
     public var logLevel: LogLevel = .information
     public var accessTokenFactory: (@Sendable () async throws -> String?)?
     public var httpClient: HttpClient?
+    /// A `URLSession` provided by the caller, used for every network request the client makes.
+    ///
+    /// The negotiate and long polling requests use the session as-is. The WebSockets and
+    /// server-sent events transports need to install their own `URLSessionDelegate`, so they
+    /// create a session from a copy of this session's `configuration` and forward authentication
+    /// challenges to this session's delegate.
+    public var urlSession: URLSession?
     public var transport: HttpTransportType?
     public var skipNegotiation: Bool = false
     public var headers: [String: String]?
@@ -116,7 +123,7 @@ actor HttpConnection: ConnectionProtocol {
         self.options.timeout = options.timeout ?? 100
 
         self.accessTokenFactory = options.accessTokenFactory
-        self.httpClient = AccessTokenHttpClient(innerClient: options.httpClient ?? DefaultHttpClient(logger: logger), accessTokenFactory: options.accessTokenFactory)
+        self.httpClient = AccessTokenHttpClient(innerClient: options.httpClient ?? DefaultHttpClient(logger: logger, urlSession: options.urlSession), accessTokenFactory: options.accessTokenFactory)
 
         (connectionStateUpdates, stateUpdateContinuation) = AsyncStream.makeStream(of: ConnectionState.self)
     }
@@ -501,7 +508,8 @@ actor HttpConnection: ConnectionProtocol {
             return WebSocketTransport(
                 accessTokenFactory: accessTokenFactory,
                 logger: logger,
-                headers: options.headers ?? [:]
+                headers: options.headers ?? [:],
+                urlSession: options.urlSession
             )
         case .serverSentEvents:
             let accessToken = await self.httpClient.accessToken

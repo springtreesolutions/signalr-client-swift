@@ -59,9 +59,9 @@ actor DefaultHttpClient: HttpClient {
     private let logger: Logger
     private let session: URLSession
 
-    init(logger: Logger) {
+    init(logger: Logger, urlSession: URLSession? = nil) {
         self.logger = logger
-        self.session = URLSession(configuration: URLSessionConfiguration.default)
+        self.session = urlSession ?? URLSession(configuration: URLSessionConfiguration.default)
     }
 
     public func send(request: HttpRequest) async throws -> (

@@ -13,6 +13,7 @@ public class HubConnectionBuilder {
     var url: String?
     var retryPolicy: RetryPolicy?
     var statefulReconnectBufferSize: Int?
+    var urlSession: URLSession?
     var httpConnectionOptions: HttpConnectionOptions = HttpConnectionOptions()
 
     public init() {}
@@ -65,6 +66,17 @@ public class HubConnectionBuilder {
         return self
     }
 
+    /// Uses the given `URLSession` for the connection instead of a session created by the client.
+    ///
+    /// The negotiate and long polling requests use the session as-is. The WebSockets and
+    /// server-sent events transports need their own `URLSessionDelegate`, so they create a session
+    /// from a copy of this session's `configuration` and forward authentication challenges to this
+    /// session's delegate.
+    public func withUrlSession(urlSession: URLSession) -> HubConnectionBuilder {
+        self.urlSession = urlSession
+        return self
+    }
+
     public func withStatefulReconnect(bufferSize: Int) -> HubConnectionBuilder {
         self.httpConnectionOptions.useStatefulReconnect = true
         self.statefulReconnectBufferSize = bufferSize
@@ -96,12 +108,22 @@ public class HubConnectionBuilder {
 //        return self
 //    }
 
+    // The options a connection is built with. The url session is applied here instead of in
+    // withUrlSession(urlSession:) so the order of that call and withUrl(url:options:) doesn't matter.
+    func resolvedHttpConnectionOptions() -> HttpConnectionOptions {
+        var options = httpConnectionOptions
+        if let urlSession = urlSession {
+            options.urlSession = urlSession
+        }
+        return options
+    }
+
     public func build() -> HubConnection {
         guard let url = url else {
             fatalError("url must be set with .withUrl(String:)")
         }
 
-        let connection = connection ?? HttpConnection(url: url, options: httpConnectionOptions)
+        let connection = connection ?? HttpConnection(url: url, options: resolvedHttpConnectionOptions())
         let logger = Logger(logLevel: logLevel, logHandler: logHandler ?? DefaultLogHandler())
         let hubProtocol = hubProtocol ?? JsonHubProtocol()
         let retryPolicy = retryPolicy ?? DefaultRetryPolicy(retryDelays: []) // No retry by default

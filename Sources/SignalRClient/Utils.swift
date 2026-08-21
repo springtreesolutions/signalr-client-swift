@@ -3,6 +3,10 @@
 
 import Foundation
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 class Utils {
     static func getUserAgent() -> String {
         return
@@ -38,6 +42,47 @@ class Utils {
         #endif
     }
 }
+
+extension Utils {
+    /// Copies the configuration of a caller-supplied session, or creates a default one.
+    static func sessionConfiguration(from urlSession: URLSession?) -> URLSessionConfiguration {
+        // URLSession.configuration returns a copy, so mutating the result is safe.
+        return urlSession?.configuration ?? URLSessionConfiguration.default
+    }
+}
+
+#if !os(Linux)
+    extension Utils {
+        /// Forwards an authentication challenge to the delegate of a caller-supplied session.
+        ///
+        /// The WebSockets and SSE transports install their own `URLSessionDelegate`, so they can't
+        /// use a caller-supplied session directly. Forwarding the challenge keeps delegate based
+        /// logic such as certificate pinning working on those transports. Returns `false` when the
+        /// caller's session has no delegate handling challenges, in which case the caller is
+        /// responsible for performing default handling.
+        static func forwardAuthChallenge(
+            _ challenge: URLAuthenticationChallenge,
+            session: URLSession,
+            task: URLSessionTask? = nil,
+            to originalSession: URLSession?,
+            completionHandler: @escaping @Sendable (
+                URLSession.AuthChallengeDisposition, URLCredential?
+            ) -> Void
+        ) -> Bool {
+            guard let delegate = originalSession?.delegate else { return false }
+            if let task = task, let taskDelegate = delegate as? URLSessionTaskDelegate,
+               taskDelegate.urlSession?(
+                   session, task: task, didReceive: challenge,
+                   completionHandler: completionHandler
+               ) != nil {
+                return true
+            }
+            return delegate.urlSession?(
+                session, didReceive: challenge, completionHandler: completionHandler
+            ) != nil
+        }
+    }
+#endif
 
 extension HttpRequest {
     init(

@@ -3,6 +3,10 @@
 
 import Foundation
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 actor ServerSentEventTransport: Transport {
     let httpClient: HttpClient
     let logger: Logger
@@ -43,7 +47,7 @@ actor ServerSentEventTransport: Transport {
                 "\(url)\(url.contains("?") ? "&" : "?")access_token=\(accessToken.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
         }
 
-        let eventSource = options.eventSource ?? DefaultEventSourceAdaptor(logger: logger)
+        let eventSource = options.eventSource ?? DefaultEventSourceAdaptor(logger: logger, urlSession: options.urlSession)
 
         await eventSource.onClose(closeHandler: self.close)
 
@@ -110,6 +114,7 @@ actor ServerSentEventTransport: Transport {
 
 final class DefaultEventSourceAdaptor: EventSourceAdaptor, @unchecked Sendable {
     private let logger: Logger
+    private let urlSession: URLSession?
     private var closeHandler: ((Error?) async -> Void)?
     private var messageHandler: ((String) async -> Void)?
 
@@ -118,8 +123,9 @@ final class DefaultEventSourceAdaptor: EventSourceAdaptor, @unchecked Sendable {
     private var messageTask: Task<Void, Never>?
     private var messageStream: AsyncStream<String>?
 
-    init(logger: Logger) {
+    init(logger: Logger, urlSession: URLSession? = nil) {
         self.logger = logger
+        self.urlSession = urlSession
         self.dispatchQueue = DispatchQueue(label: "DefaultEventSourceAdaptor")
     }
 
@@ -127,7 +133,7 @@ final class DefaultEventSourceAdaptor: EventSourceAdaptor, @unchecked Sendable {
         guard let url = URL(string: url) else {
             throw SignalRError.invalidUrl(url)
         }
-        let eventSource = EventSource(url: url, headers: headers)
+        let eventSource = EventSource(url: url, headers: headers, urlSession: self.urlSession)
         let openTcs = TaskCompletionSource<Void>()
 
         eventSource.onOpen {

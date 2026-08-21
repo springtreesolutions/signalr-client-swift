@@ -17,11 +17,12 @@ actor WebSocketTransport: Transport {
     init(accessTokenFactory: (@Sendable () async throws -> String?)?,
          logger: Logger,
          headers: [String: String],
+         urlSession: URLSession? = nil,
          websocket: WebSocketConnection? = nil) {
         self.accessTokenFactory = accessTokenFactory
         self.logger = logger
         self.headers = headers
-        self.webSocketConnection = websocket ?? DefaultWebSocketConnection(logger: logger)
+        self.webSocketConnection = websocket ?? DefaultWebSocketConnection(logger: logger, urlSession: urlSession)
     }
 
     func onReceive(_ handler: OnReceiveHandler?) async {
@@ -97,7 +98,7 @@ actor WebSocketTransport: Transport {
             func onClose(_ handler: WebSocketTransport.OnCloseHander?) async {
             }
 
-            init(logger: Logger) {
+            init(logger: Logger, urlSession: URLSession?) {
             }
         }
     #else
@@ -119,13 +120,18 @@ actor WebSocketTransport: Transport {
             private var closed: Bool = false
             private var invalidationContinuation: CheckedContinuation<Void, Never>?
 
-            init(logger: Logger, sessionFactory: @escaping SessionFactory = { URLSession(configuration: $0, delegate: $1, delegateQueue: $2) }) {
+            // The caller-supplied session, if any. Its configuration is copied into the session
+            // created below, and its delegate handles authentication challenges.
+            private let providedSession: URLSession?
+
+            init(logger: Logger, urlSession: URLSession? = nil, sessionFactory: @escaping SessionFactory = { URLSession(configuration: $0, delegate: $1, delegateQueue: $2) }) {
                 self.logger = logger
+                self.providedSession = urlSession
                 self.sessionFactory = sessionFactory
             }
 
             func connect(request: URLRequest, transferFormat: TransferFormat) async throws {
-                urlSession = sessionFactory(.default, self, OperationQueue())
+                urlSession = sessionFactory(Utils.sessionConfiguration(from: providedSession), self, OperationQueue())
                 websocket = urlSession!.webSocketTask(with: request)
 
                 guard websocket != nil else {
@@ -203,6 +209,14 @@ actor WebSocketTransport: Transport {
                 invalidationContinuation?.resume()
                 invalidationContinuation = nil
             }
+
+            // Let the caller-supplied session's delegate answer challenges (e.g. certificate pinning)
+            nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+                if !Utils.forwardAuthChallenge(challenge, session: session, task: task, to: providedSession, completionHandler: completionHandler) {
+                    completionHandler(.performDefaultHandling, nil)
+                }
+            }
+
 
             nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
                 logger.log(level: .debug, message: "(WebSockets transport) URLSession didCompleteWithError: \(String(describing: error))")

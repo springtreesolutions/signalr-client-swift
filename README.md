@@ -262,6 +262,25 @@ let connection = HubConnectionBuilder()
     .build()
 ```
 
+## Provide your own URLSession
+
+By default the client creates its own `URLSession` instances. Call `withUrlSession(urlSession:)` to make the connection use a session you own, for example to apply a custom `URLSessionConfiguration`, share a session with the rest of your app, or install a delegate that pins certificates.
+
+```swift
+let configuration = URLSessionConfiguration.default
+configuration.waitsForConnectivity = true
+let session = URLSession(configuration: configuration, delegate: myDelegate, delegateQueue: nil)
+
+let connection = HubConnectionBuilder()
+    .withUrl(url: "https://your-signalr-server")
+    .withUrlSession(urlSession: session)
+    .build()
+```
+
+The negotiate and Long Polling requests are sent through the session as-is. The WebSockets and ServerSentEvents transports have to install their own `URLSessionDelegate`, so they create a session from a copy of your session's `configuration` and forward authentication challenges (`urlSession(_:didReceive:completionHandler:)` and `urlSession(_:task:didReceive:completionHandler:)`) to your session's delegate. Other delegate callbacks are not forwarded on those two transports.
+
+The same session can be set on `HttpConnectionOptions.urlSession` when you build the connection with `withUrl(url:options:)`. If you need full control over how HTTP requests are made, provide an `HttpClient` implementation through `HttpConnectionOptions.httpClient` instead.
+
 ## Support and unsupported features
 
 | Feature                         | Supported |

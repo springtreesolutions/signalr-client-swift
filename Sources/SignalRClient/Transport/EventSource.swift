@@ -22,9 +22,13 @@ class EventSource: NSObject, URLSessionDataDelegate {
     private var completeHandler: ((Int?, Error?) -> Void)?
     private var messageHandler: ((String) -> Void)?
     private var urlSession: URLSession?
+    // The caller-supplied session, if any. Its configuration is copied into the session created
+    // in connect(), and its delegate handles authentication challenges.
+    private let providedSession: URLSession?
 
-    init(url: URL, headers: [String: String]?) {
+    init(url: URL, headers: [String: String]?, urlSession: URLSession? = nil) {
         self.url = url
+        self.providedSession = urlSession
         var headers = headers ?? [:]
         headers["Accept"] = "text/event-stream"
         headers["Cache-Control"] = "no-cache"
@@ -33,8 +37,12 @@ class EventSource: NSObject, URLSessionDataDelegate {
     }
 
     func connect() {
-        let config = URLSessionConfiguration.default
-        config.httpAdditionalHeaders = self.headers
+        let config = Utils.sessionConfiguration(from: self.providedSession)
+        var additionalHeaders = config.httpAdditionalHeaders ?? [:]
+        for (key, value) in self.headers {
+            additionalHeaders[key] = value
+        }
+        config.httpAdditionalHeaders = additionalHeaders
         config.timeoutIntervalForRequest = TimeInterval.infinity
         config.timeoutIntervalForResource = TimeInterval.infinity
         self.urlSession = URLSession(
@@ -60,6 +68,25 @@ class EventSource: NSObject, URLSessionDataDelegate {
     func onMessage(messageHandler: @escaping (String) -> Void) {
         self.messageHandler = messageHandler
     }
+
+    #if !os(Linux)
+        // MARK: authentication challenge
+        // Let the caller-supplied session's delegate answer challenges (e.g. certificate pinning)
+        public func urlSession(
+            _ session: URLSession, task: URLSessionTask,
+            didReceive challenge: URLAuthenticationChallenge,
+            completionHandler: @escaping @Sendable (
+                URLSession.AuthChallengeDisposition, URLCredential?
+            ) -> Void
+        ) {
+            if !Utils.forwardAuthChallenge(
+                challenge, session: session, task: task, to: self.providedSession,
+                completionHandler: completionHandler
+            ) {
+                completionHandler(.performDefaultHandling, nil)
+            }
+        }
+    #endif
 
     // MARK: redirect
     public func urlSession(
